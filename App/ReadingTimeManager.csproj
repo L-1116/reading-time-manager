@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>0.1.2</Version>
+    <Product>Reading Time Manager</Product>
+    <ApplicationIcon>Assets/ReadingTimeManager.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/ReadingTimeManager.Core.csproj" />
+    <Resource Include="Assets/ReadingTimeManager.ico;Assets/Mark.png" />
+    <InternalsVisibleTo Include="ReadingTimeManager.Tests" />
+  </ItemGroup>
+  <Target Name="OrganizePortablePublish" AfterTargets="ComputeFilesToPublish"
+          DependsOnTargets="_GetAppHostPaths"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64' and '$(SelfContained)' == 'true' and '$(PublishSingleFile)' != 'true' and '$(UseAppHost)' == 'true'">
+    <PropertyGroup>
+      <PortableAppHost>$(IntermediateOutputPath)portable/$(AssemblyName).exe</PortableAppHost>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntermediateOutputPath)portable" />
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
+                   AppHostDestinationPath="$(PortableAppHost)"
+                   AppBinaryName="app\$(AssemblyName)$(TargetExt)"
+                   IntermediateAssembly="@(IntermediateAssembly->'%(FullPath)')"
+                   WindowsGraphicalUserInterface="true"
+                   DotNetSearchLocations="AppLocal" />
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == '$(AssemblyName).exe'" />
+      <ResolvedFileToPublish>
+        <RelativePath>app/%(ResolvedFileToPublish.RelativePath)</RelativePath>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="$(PortableAppHost)" RelativePath="$(AssemblyName).exe" CopyToPublishDirectory="PreserveNewest" />
+      <ResolvedFileToPublish Include="$(MSBuildProjectDirectory)/../README.md" RelativePath="README.md" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+</Project>

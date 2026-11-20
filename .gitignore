@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+/dist/
+/validation/
+__pycache__/
+*.tsv
+*.zip
+*.log
