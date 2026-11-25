@@ -12,7 +12,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
-internal static class Program
+internal static partial class Program
 {
     private const string Header = "date\tbook_id\tseconds\ttitle\n";
     private static readonly DateOnly Today = new(2026, 9, 30);
@@ -21,8 +21,8 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        if (args.Length is not (0 or 1 or 3))
-            throw new ArgumentException("Usage: [screenshots-directory [awk-exe kindle-cache-script]]");
+        if (args.Length is not (0 or 1 or 3) && args.Length < 5)
+            throw new ArgumentException("Usage: [screenshots-directory [awk-exe kindle-cache-script [shell-exe daemon-script ...]]]");
         var root = Path.Combine(Path.GetTempPath(), "rtm-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -35,8 +35,15 @@ internal static class Program
             var synthetic = Path.Combine(root, "合成阅读记录.tsv");
             var history = TestSynthetic(synthetic);
             TestInvalid(root);
+            var (source, exported) = TestEditing(root);
             TestWpf(fixture, synthetic, root, args.FirstOrDefault());
-            if (args.Length == 3) CompareAwk(history, synthetic, root, Path.GetFullPath(args[1]), Path.GetFullPath(args[2]));
+            if (args.Length >= 3)
+            {
+                var awk = Path.GetFullPath(args[1]);
+                var script = Path.GetFullPath(args[2]);
+                CompareAwk(history, synthetic, Path.Combine(root, "synthetic-awk"), awk, script);
+                TestKindleEditing(source, exported, root, awk, script, args.Skip(3).ToArray());
+            }
             Console.WriteLine("PASS: synthetic fixtures, import/reload integrity, WPF navigation and off-screen layout.");
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -161,6 +168,7 @@ internal static class Program
         Click(surface, button => Caption(button).Contains("阅读书籍"));
         Has(surface, "2 本书");
         Snap(surface, snapshots, "books");
+        TestWpfEditing(window, surface, fixture, snapshots);
         var bookList = Elements(surface).OfType<ListBox>().Single();
         var search = Elements(surface).OfType<TextBox>().Single();
         search.Text = "海洋";
@@ -217,16 +225,17 @@ internal static class Program
         application.Shutdown();
     }
 
-    private static void CompareAwk(ReadingHistory history, string synthetic, string path, string awk, string script)
+    private static Dictionary<string, string[]> CompareAwk(ReadingHistory history, string synthetic, string path, string awk, string script)
     {
+        Directory.CreateDirectory(path);
         File.Copy(script, Path.Combine(path, "cache.awk"));
-        var text = File.ReadAllText(synthetic, Encoding.UTF8);
+        var text = File.ReadAllText(synthetic, Encoding.UTF8).Replace("\r\n", "\n");
         File.WriteAllText(Path.Combine(path, "input.tsv"), text, new UTF8Encoding(false));
         var start = new ProcessStartInfo(awk) { WorkingDirectory = path, UseShellExecute = false, CreateNoWindow = true };
         start.ArgumentList.Add("-F");
         start.ArgumentList.Add("\\t");
         string[] outputs = ["calendar", "summary", "months", "weeks", "days", "daybooks", "books", "books7", "booksmonth", "booksyear"];
-        foreach (var variable in outputs.Select(name => $"{name}={name}").Prepend("today=2026-09-30"))
+        foreach (var variable in outputs.Select(name => $"{name}={name}").Prepend($"today={Today:yyyy-MM-dd}"))
         {
             start.ArgumentList.Add("-v");
             start.ArgumentList.Add(variable);
@@ -237,7 +246,8 @@ internal static class Program
         using var process = Process.Start(start)!;
         if (!process.WaitForExit(15000)) throw new TimeoutException("AWK reference timed out.");
         Equal(0, process.ExitCode);
-        var lines = File.ReadAllLines(Path.Combine(path, "days"));
+        var cache = outputs.ToDictionary(name => name, name => File.ReadAllLines(Path.Combine(path, name)).Order(StringComparer.Ordinal).ToArray());
+        var lines = cache["days"];
         foreach (var line in lines)
         {
             var fields = line.Split('\t');
@@ -247,8 +257,14 @@ internal static class Program
         Equal($"{summary.Seconds}\t{summary.ReadDays}", File.ReadAllText(Path.Combine(path, "summary")).Trim());
         var expected = history.ReadBooks(DateOnly.MinValue, Today).Select(reading =>
             $"{reading.Seconds}\t{reading.Book.Title}\t{reading.Book.Id}\t{reading.Book.Number}").Order(StringComparer.Ordinal);
-        Equal(string.Join('\n', expected), string.Join('\n', File.ReadAllLines(Path.Combine(path, "books")).Order(StringComparer.Ordinal)));
-        Console.WriteLine("PASS: same synthetic input matches repository reading-insights-cache.awk (days, summary, books).");
+        Equal(string.Join('\n', expected), string.Join('\n', cache["books"]));
+        var dayBooks = lines.Select(line => DateOnly.Parse(line.Split('\t')[0])).SelectMany(date =>
+            history.ReadOn(date).Select(reading =>
+                $"{date:yyyy-MM-dd}\t{reading.Seconds}\t{reading.Book.Title}\t{reading.Book.Id}\t{reading.Book.Number}"))
+            .Order(StringComparer.Ordinal);
+        Equal(string.Join('\n', dayBooks), string.Join('\n', cache["daybooks"]));
+        Console.WriteLine("PASS: input matches repository reading-insights-cache.awk (days, summary, books, daybooks).");
+        return cache;
     }
 
     private static void Snap(FrameworkElement surface, string? folder, string name, double width = 1220, double height = 780, double scale = 1)

@@ -5,7 +5,8 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.1.2</Version>
+    <Version>0.2.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>Reading Time Manager</Product>
     <ApplicationIcon>Assets/ReadingTimeManager.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>

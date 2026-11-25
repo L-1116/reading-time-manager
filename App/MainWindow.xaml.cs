@@ -31,7 +31,7 @@ public partial class MainWindow : Window
     private TotalRange totalRange;
     private BookRange bookRange;
     private BookOrder bookOrder;
-    private bool fiveMinutes, loading, recentWeeks;
+    private bool fiveMinutes, busy, recentWeeks;
     private string search = "";
     private Book? selectedBook;
 
@@ -76,14 +76,14 @@ public partial class MainWindow : Window
 
     private void OnDragOver(object sender, DragEventArgs args)
     {
-        args.Effects = !loading && DropPath(args) is not null ? DragDropEffects.Copy : DragDropEffects.None;
+        args.Effects = !busy && DropPath(args) is not null ? DragDropEffects.Copy : DragDropEffects.None;
         args.Handled = true;
     }
 
     private async void OnDrop(object sender, DragEventArgs args)
     {
         args.Handled = true;
-        if (!loading && DropPath(args) is { } path) await OpenAsync(path);
+        if (!busy && DropPath(args) is { } path) await OpenAsync(path);
     }
 
     private static string? DropPath(DragEventArgs args) => args.Data.GetData(DataFormats.FileDrop) is string[] { Length: 1 } files &&
@@ -91,9 +91,8 @@ public partial class MainWindow : Window
 
     internal async Task OpenAsync(string path, bool preserveView = false)
     {
-        if (loading) return;
-        loading = true;
-        OpenButton.IsEnabled = ReloadButton.IsEnabled = false;
+        if (busy) return;
+        SetBusy(true);
         SetNotice("正在读取文件…");
         try
         {
@@ -111,6 +110,7 @@ public partial class MainWindow : Window
             }
             today = clock();
             selectedBook = null;
+            EndMergeSelection();
             SourceName.Text = Path.GetFileName(session.Path);
             SourceName.ToolTip = session.Path;
             SourceInfo.Text = history.RowCount == 0 ? "已读取 · 没有阅读记录" :
@@ -133,9 +133,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            loading = false;
-            OpenButton.IsEnabled = true;
-            ReloadButton.IsEnabled = session.Path is not null;
+            SetBusy(false);
         }
     }
 
@@ -155,6 +153,7 @@ public partial class MainWindow : Window
         selectedBook = null;
         monthDetailMonth = null;
         recentWeeks = false;
+        EndMergeSelection();
         Render();
     }
 
@@ -171,7 +170,7 @@ public partial class MainWindow : Window
             var empty = Card(Page);
             empty.Children.Add(Text("打开 reading-time.tsv", 22, bold: true));
             empty.Children.Add(Text("从 Kindle 的 reading-time 文件夹选择 reading-time.tsv，或将文件拖到窗口。", 14, muted: true, top: 8, wrap: true));
-            empty.Children.Add(Text("仅浏览，原始记录不会被修改。", 13, muted: true, top: 8));
+            empty.Children.Add(Text("合并仅在本次会话中生效，导出会另存一份 TSV。", 13, muted: true, top: 8, wrap: true));
             return;
         }
         if (monthDetailMonth is { } detailMonth)

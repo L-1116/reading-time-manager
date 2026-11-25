@@ -9,19 +9,34 @@ namespace ReadingTimeManager;
 
 public partial class MainWindow
 {
-    private sealed record BookRow(BookReading Reading)
+    private sealed class BookRow(BookReading reading, bool isChecked, Action<Book, bool>? setChecked)
     {
-        public string Name => Reading.Book.Name;
-        public string DaysText => $"{Reading.ReadDays} 个阅读日 · 最近 {Reading.LastDay:yyyy-MM-dd}";
-        public string TimeText => Duration(Reading.Seconds);
+        public BookReading Reading => reading;
+        public string Name => reading.Book.Name;
+        public string DaysText => CanCheck
+            ? $"{DisplayId(reading.Book.Id)} · {reading.ReadDays} 个阅读日"
+            : $"{reading.ReadDays} 个阅读日 · 最近 {reading.LastDay:yyyy-MM-dd}";
+        public string TimeText => Duration(reading.Seconds);
+        public bool CanCheck => setChecked is not null;
+        private bool checkedForMerge = isChecked;
+        public bool CheckedForMerge
+        {
+            get => checkedForMerge;
+            set
+            {
+                checkedForMerge = value;
+                setChecked?.Invoke(reading.Book, value);
+            }
+        }
         public override string ToString() => $"{Name}，{TimeText}，{DaysText}";
     }
 
     private void RenderBooks(ReadingHistory history)
     {
         if (selectedBook is { } book) { RenderBookDetail(history, book); return; }
-        PageTitle("阅读书籍", "按书籍汇总 · 搜索、排序或打开单书详情");
+        PageTitle("阅读书籍", mergeMode ? "选择需要合并的书籍" : "按书籍汇总 · 搜索、排序或打开单书详情");
         var card = Card(Page);
+        AddMergeToolbar(card, history);
         var filters = new WrapPanel();
         card.Children.Add(filters);
         var toolbar = new Grid { Margin = new(0, 12, 0, 0) };
@@ -58,16 +73,17 @@ public partial class MainWindow
         ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
         list.PreviewMouseLeftButtonUp += (_, args) =>
         {
-            if (args.OriginalSource is DependencyObject origin && ItemsControl.ContainerFromElement(list, origin) is ListBoxItem { Content: BookRow row })
+            if (!mergeMode && args.OriginalSource is DependencyObject origin &&
+                ItemsControl.ContainerFromElement(list, origin) is ListBoxItem { Content: BookRow row })
                 OpenBook(row.Reading.Book);
         };
         list.PreviewKeyDown += (_, args) =>
         {
-            if (args.Key != Key.Enter || list.SelectedItem is not BookRow row) return;
+            if (mergeMode || args.Key != Key.Enter || list.SelectedItem is not BookRow row) return;
             args.Handled = true;
             OpenBook(row.Reading.Book);
         };
-        AutomationProperties.SetName(list, "书籍列表，选择后按 Enter 查看详情");
+        AutomationProperties.SetName(list, mergeMode ? "书籍列表，勾选参与合并的书籍" : "书籍列表，选择后按 Enter 查看详情");
         card.Children.Add(list);
         BookRange? lastRange = null;
         BookReading[] rangeReadings = [];
@@ -106,7 +122,8 @@ public partial class MainWindow
                 BookOrder.Title => readings.OrderBy(reading => reading.Book.Name, StringComparer.CurrentCultureIgnoreCase),
                 _ => readings.OrderByDescending(reading => reading.Seconds)
             };
-            var rows = sorted.ThenBy(reading => reading.Book.Number).Select(reading => new BookRow(reading)).ToArray();
+            var rows = sorted.ThenBy(reading => reading.Book.Number).Select(reading =>
+                new BookRow(reading, mergeSelection.Contains(reading.Book.Number), mergeMode ? SetMergeChecked : null)).ToArray();
             list.ItemsSource = rows;
             status.Text = rows.Length == 0 ? "没有符合当前条件的书籍" : $"{rows.Length:N0} 本书 · 时长和天数按所选范围统计";
             for (int index = 0; index < ranges.Length; index++) MarkSelected((Button)filters.Children[index], ranges[index].Range == bookRange);

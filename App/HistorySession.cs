@@ -7,15 +7,42 @@ namespace ReadingTimeManager;
 
 internal sealed class HistorySession
 {
+    private readonly Stack<ReadingHistory> undo = new();
+    private ReadingHistory? original;
+
     public ReadingHistory? History { get; private set; }
     public string? Path { get; private set; }
+    public bool CanUndo => undo.Count > 0;
 
     public async Task OpenAsync(string path)
     {
         var absolutePath = System.IO.Path.GetFullPath(path);
         var history = await Task.Run(() => ReadingHistory.Load(absolutePath));
-        History = history;
+        History = original = history;
         Path = absolutePath;
+        undo.Clear();
+    }
+
+    public void Merge(IReadOnlyCollection<Book> books, string title, string id)
+    {
+        var previous = History ?? throw new HistoryEditException("请先导入 TSV。");
+        var edited = previous.MergeBooks(books, title, id);
+        undo.Push(previous);
+        History = edited;
+    }
+
+    public bool Undo()
+    {
+        if (!undo.TryPop(out var previous)) return false;
+        History = previous;
+        return true;
+    }
+
+    public Task ExportAsync(string destination)
+    {
+        if (!CanUndo || History is not { } history || original is not { } baseline || Path is not { } source)
+            throw new HistoryEditException("当前阅读记录尚未修改。");
+        return Task.Run(() => history.Export(destination, source, baseline));
     }
 }
 

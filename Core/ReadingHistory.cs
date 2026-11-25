@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text;
 
@@ -8,6 +9,7 @@ public sealed class HistoryFormatException(string message) : FormatException(mes
 public sealed record Book(int Number, string Id, string Title, IReadOnlyDictionary<DateOnly, long> Days)
 {
     public string Name => Title.Length == 0 ? "未命名书籍" : Title;
+    public IReadOnlyList<string> UsableOriginalTitles { get; internal init; } = Array.Empty<string>();
 }
 
 public sealed record BookReading(Book Book, long Seconds, int ReadDays, DateOnly LastDay);
@@ -15,7 +17,7 @@ public sealed record Summary(long Seconds, int ReadDays, int BookCount, long Ave
 public sealed record BookDetail(Summary Summary, DateOnly FirstDay, DateOnly LastDay, long MonthSeconds, long RecentSeconds);
 public sealed record Bucket(string Label, long Seconds, DateOnly? Date = null, bool Current = false);
 
-public sealed class ReadingHistory
+public sealed partial class ReadingHistory
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private const string Header = "date\tbook_id\tseconds\ttitle";
@@ -23,11 +25,27 @@ public sealed class ReadingHistory
     private readonly SortedDictionary<DateOnly, long> days = new();
     private readonly Dictionary<DateOnly, List<BookReading>> byDay = new();
     private readonly Book[] books;
+    private readonly HistoryRow[] rows;
 
-    private ReadingHistory(List<Book> books, int rows)
+    private ReadingHistory(HistoryRow[] rows)
     {
-        this.books = books.ToArray();
-        RowCount = rows;
+        this.rows = rows;
+        var entries = new Dictionary<(string Id, string TitleKey), Entry>();
+        foreach (var row in rows)
+        {
+            var key = BookKey(row.Id, row.Title);
+            if (!entries.TryGetValue(key, out var entry))
+                entries.Add(key, entry = new(entries.Count + 1, row.Id, row.Title));
+            if (Usable(row.Title, row.Id) && entry.Titles.Add(row.Title) && entry.Titles.Count == 1)
+                entry.Title = row.Title;
+            entry.Days[row.Date] = entry.Days.GetValueOrDefault(row.Date) + row.Seconds;
+        }
+        books = entries.Values.Select(entry => new Book(entry.Number, entry.Id,
+            Usable(entry.Title, entry.Id) ? entry.Title : entry.Id,
+            new ReadOnlyDictionary<DateOnly, long>(entry.Days))
+        {
+            UsableOriginalTitles = Array.AsReadOnly(entry.Titles.ToArray())
+        }).ToArray();
         foreach (var book in books)
         foreach (var (date, seconds) in book.Days)
         {
@@ -37,7 +55,7 @@ public sealed class ReadingHistory
         }
     }
 
-    public int RowCount { get; }
+    public int RowCount => rows.Length;
     public DateOnly? FirstRecordedDay => days.Count == 0 ? null : days.First().Key;
     public DateOnly? LastRecordedDay => days.Count == 0 ? null : days.Last().Key;
     public DateOnly? LastReadingAtOrBefore(DateOnly date) => days.Reverse()
@@ -55,15 +73,15 @@ public sealed class ReadingHistory
     private static ReadingHistory Parse(TextReader reader)
     {
         var header = reader.ReadLine();
-        if (header is null) return new([], 0);
+        if (header is null) return new([]);
         if (header.StartsWith('\uFEFF')) header = header[1..];
-        if (header.Length == 0 && reader.Peek() < 0) return new([], 0);
+        if (header.Length == 0 && reader.Peek() < 0) return new([]);
         if (header != Header)
             throw Invalid(1, "表头应为 date、book_id、seconds、title（以制表符分隔）。");
 
-        var entries = new Dictionary<(string Id, string TitleKey), Entry>();
+        var rows = new List<HistoryRow>();
         long total = 0;
-        int lineNumber = 1, rows = 0;
+        int lineNumber = 1;
         while (reader.ReadLine() is { } line)
         {
             lineNumber++;
@@ -79,17 +97,13 @@ public sealed class ReadingHistory
             if (seconds > long.MaxValue - total) throw Invalid(lineNumber, "累计秒数超出可表示的范围。");
             total += seconds;
 
-            var id = fields[1];
-            var title = fields[3];
-            var key = (id, id is "" or "unknown" ? title : "");
-            if (!entries.TryGetValue(key, out var entry)) entries.Add(key, entry = new(entries.Count + 1, id, title));
-            if (!Usable(entry.Title, id) && Usable(title, id)) entry.Title = title;
-            entry.Days[date] = entry.Days.GetValueOrDefault(date) + seconds;
-            rows++;
+            rows.Add(new(date, fields[1], seconds, fields[2], fields[3]));
         }
-        return new(entries.Values.Select(entry => new Book(entry.Number, entry.Id,
-            Usable(entry.Title, entry.Id) ? entry.Title : entry.Id, entry.Days)).ToList(), rows);
+        return new(rows.ToArray());
     }
+
+    private static (string Id, string TitleKey) BookKey(string id, string title) =>
+        (id, MissingId(id) ? title : "");
 
     private static bool Usable(string title, string id) => title is not ("" or "unknown") && title != id &&
         !(title.Length >= 16 && title.All(char.IsAsciiHexDigit));
@@ -199,6 +213,9 @@ public sealed class ReadingHistory
         public int Number { get; } = number;
         public string Id { get; } = id;
         public string Title { get; set; } = title;
+        public HashSet<string> Titles { get; } = new(StringComparer.Ordinal);
         public Dictionary<DateOnly, long> Days { get; } = new();
     }
+
+    private sealed record HistoryRow(DateOnly Date, string Id, long Seconds, string SecondsField, string Title);
 }
